@@ -7,8 +7,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"text/tabwriter"
 
+	jwtmiddleware "github.com/auth0/go-jwt-middleware"
+	jwt "github.com/dgrijalva/jwt-go"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"gopkg.in/ldap.v2"
 )
 
@@ -17,9 +22,16 @@ const (
 <html>
 <head>
 	<title>Login</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" type="text/css">
+    {{noescape	"<!--[if lt IE 9]><script src='/html5shiv/dist/html5shiv.min.js'></script><script src='/Respond/dest/respond.min.js'></script><![endif]-->"}}
+    <link rel="shortcut icon" href="/bootstrap/img/favicon.ico">
+	<link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet">
 </head>
 <body>
-	<form class="form-horizontal" role="form" action="/login" method="POST">
+	<form class="form-horizontal" role="form" action="/auth" method="POST">
 			<input type="text" class="form-control form-lg" placeholder="Username" name="username" id="username">
 			<input type="password" class="form-control form-lg" placeholder="Password" name="password" id="password">
 			<button type="submit" class="btn btn-primary form-lg submit-btn">Login</button>
@@ -61,20 +73,44 @@ func ldapSearch(cfg *config, username, userdn, password string) (*ldap.SearchRes
 	return srch, nil
 }
 
-func handleLogin(cfg *config) http.HandlerFunc {
+func handleLogin(cfg *config, lw ldapWeb) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := r.ParseForm()
+		var username, userdn, password string
+
+		sess, err := lw.sessionStore.Get(r, "session")
 		if err != nil {
-			http.Error(w, "couldn't parse form", 400)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		username := r.FormValue("username")
-		userdn := getBaseDN(cfg.dnTemplate, username)
-		password := r.FormValue("password")
+
+		if _, ok := sess.Values["username"]; !ok {
+			err := r.ParseForm()
+			if err != nil {
+				http.Error(w, "couldn't parse form", 400)
+				return
+			}
+			username = r.FormValue("username")
+			userdn = getBaseDN(cfg.dnTemplate, username)
+			password = r.FormValue("password")
+
+			sess.Values["username"] = username
+			sess.Values["userdn"] = userdn
+			sess.Values["password"] = password
+
+			err = sess.Save(r, w)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			username = sess.Values["username"].(string)
+			userdn = sess.Values["userdn"].(string)
+			password = sess.Values["password"].(string)
+		}
 
 		srch, err := ldapSearch(cfg, username, userdn, password)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("couldn't search LDAP: %+v\n", err), 500)
+			http.Error(w, fmt.Sprintf("couldn't search LDAP: %+v\n", err), http.StatusInternalServerError)
 			return
 		}
 
@@ -98,7 +134,8 @@ func handleLogin(cfg *config) http.HandlerFunc {
 
 func displayLogin(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("in displayLogin")
-	t := template.Must(template.New("displayLogin").Parse(displayLoginPage))
+	templateFuncs := template.FuncMap{"noescape": noescape}
+	t := template.Must(template.New("displayLogin").Funcs(templateFuncs).Parse(displayLoginPage))
 	err := t.Execute(w, nil)
 	if err != nil {
 		fmt.Println("error:", err)
@@ -129,13 +166,39 @@ func loadCfg() *config {
 }
 
 type ldapWeb struct {
-	config config
+	musessions sync.Mutex
+	sessions   map[int64]session
+
+	sessionStore sessions.Store
+
+	config *config
+}
+
+func (lw *ldapWeb) handleMailaliasCreate(w http.ResponseWriter, r *http.Request) {
+
 }
 
 func main() {
 	cfg := loadCfg()
+	lw := ldapWeb{
+		sessions:     make(map[int64]session),
+		sessionStore: sessions.NewCookieStore([]byte("secret")),
+		config:       cfg,
+	}
+	r := mux.NewRouter()
 
-	http.HandleFunc("/", displayLogin)
-	http.HandleFunc("/login", handleLogin(cfg))
-	http.ListenAndServe(":1111", nil)
+	jmw := jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			return []byte("secret"), nil
+		},
+		SigningMethod: jwt.SigningMethodHS256,
+	})
+
+	_ = jmw
+
+	r.HandleFunc("/", displayLogin).Methods("GET")
+	r.HandleFunc("/auth", handleLogin(cfg, lw)).Methods("POST")
+	r.HandleFunc("/mailalias", lw.handleMailaliasCreate).Methods("POST")
+
+	http.ListenAndServe(":1111", r)
 }
