@@ -1,12 +1,12 @@
-FROM golang:1.10 as builder
+FROM golang:1.20 as builder
 
 WORKDIR /go/src/github.com/dolanor/ldap-web
 COPY . ./
 
-RUN go get -v .
+RUN go install -v .
 
 FROM debian:stable
 
 WORKDIR /
-COPY --from=builder /go/bin/ldap-web .
-CMD [ "./ldap-web" ]
+COPY --from=builder /go/bin/ldapweb .
+CMD [ "./ldapweb" ]

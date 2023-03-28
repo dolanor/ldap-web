@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"sync"
 
@@ -72,6 +73,7 @@ func main() {
 	}
 	r := mux.NewRouter()
 
+	// FIXME: use it
 	jmw := jwtmiddleware.New(jwtmiddleware.Options{
 		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
 			return []byte("secret"), nil
@@ -86,5 +88,6 @@ func main() {
 	r.HandleFunc("/password", lw.handleModifyPassword).Methods("POST")
 	r.HandleFunc("/mailalias", lw.handleAddMailalias).Methods("POST")
 
+	log.Println("listening on :1111")
 	http.ListenAndServe(":1111", r)
 }
