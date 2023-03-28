@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"sync"
 
-	jwtmiddleware "github.com/auth0/go-jwt-middleware"
-	jwt "github.com/form3tech-oss/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 )
@@ -72,16 +70,6 @@ func main() {
 		config:       cfg,
 	}
 	r := mux.NewRouter()
-
-	// FIXME: use it
-	jmw := jwtmiddleware.New(jwtmiddleware.Options{
-		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
-			return []byte("secret"), nil
-		},
-		SigningMethod: jwt.SigningMethodHS256,
-	})
-
-	_ = jmw
 
 	r.HandleFunc("/", displayForm).Methods("GET")
 	r.HandleFunc("/user", lw.displayUserInfo).Methods("POST")
